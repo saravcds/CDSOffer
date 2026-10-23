@@ -1,0 +1,7 @@
+# never commit employee data
+data/
+output/
+*.pdf
+.venv/
+__pycache__/
+.streamlit/secrets.toml
