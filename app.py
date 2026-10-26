@@ -27,15 +27,17 @@ st.set_page_config(page_title="CDS Offer Letters", page_icon="📄", layout="wid
 if not cloud_store.check_password():
     st.stop()
 
-# On Streamlit Cloud the register lives in a private GitHub repo; pull the latest copy each run
+# The register is the permanent log of every issued ID. On Streamlit Cloud it lives in the
+# private GitHub repo; pull the latest copy on every run and never fall back to a blank file.
 try:
-    _sync = cloud_store.pull(REGISTER_PATH)
+    cloud_store.pull(REGISTER_PATH)
+except cloud_store.RegisterUnavailable as ex:
+    st.error("**Offer register not loaded — no document IDs can be issued.**\n\n" + str(ex))
+    st.stop()
 except Exception as ex:
-    st.error(f"Could not load the offer register from GitHub: {ex}. Not safe to issue IDs.")
+    st.error(f"Could not load the offer register: {ex}. Not safe to issue IDs.")
     st.stop()
 reg = Register(REGISTER_PATH)
-if _sync == "new":
-    cloud_store.push(REGISTER_PATH, "Create offer register")
 
 
 def save_register(entries):
@@ -63,7 +65,9 @@ with st.sidebar:
     year = letter_date.year
     next_seq = reg.next_seq(year)
     st.info(f"Next document ID:\n\n**{make_doc_id(year, next_seq)}**")
-    st.caption("Register: " + ("GitHub (synced)" if cloud_store.enabled() else str(REGISTER_PATH)))
+    _rows = reg.rows()
+    st.caption(f"Register: {'GitHub · ' + cloud_store.describe() if cloud_store.enabled() else 'local file'}"
+               f" · {len(_rows)} IDs logged" + (f" · last {_rows[-1]['Doc ID']}" if _rows else ""))
 
 
 def tpl():

@@ -1,58 +1,104 @@
 """
-Keeps the offer register safe when the app runs on Streamlit Community Cloud.
+Keeps the offer register (the log of every issued document ID) safe on Streamlit Community Cloud.
 
-The cloud server's disk is wiped on every restart, so the register is stored in a
-private GitHub repo and pulled/pushed through the GitHub API.
-If no [github] secrets are set, the app simply uses the local file (fine on a PC).
+The cloud server's disk is wiped on every restart, so the register is stored in the
+private GitHub repo saravcds/CDSOffer-data and pulled/pushed through the GitHub API.
+
+On Streamlit Cloud the app REFUSES to issue IDs unless this works, so numbering can
+never silently restart at 101. On a PC with no secrets, the local file is used.
 
 Secrets (Streamlit Cloud > App > Settings > Secrets):
-    app_password = "..."            # login for HR
+    app_password = "..."
     [github]
-    token  = "github_pat_..."       # fine-grained token, Contents: read & write, only the data repo
+    token  = "github_pat_..."          # fine-grained, CDSOffer-data only, Contents read/write
     repo   = "saravcds/CDSOffer-data"
     path   = "offer_register.xlsx"
     branch = "main"
+(A top-level GITHUB_TOKEN / github_token is also accepted.)
 """
 import base64
+import os
 from pathlib import Path
 
 import requests
 import streamlit as st
 
 API = "https://api.github.com"
+DEFAULTS = {"repo": "saravcds/CDSOffer-data", "path": "offer_register.xlsx", "branch": "main"}
+
+
+def on_streamlit_cloud() -> bool:
+    return Path("/mount/src").exists() or os.environ.get("HOSTNAME", "") == "streamlit"
+
+
+def _secret(key, default=None):
+    try:
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
 
 
 def _cfg():
-    try:
-        g = st.secrets.get("github")
-    except Exception:
+    g = _secret("github") or {}
+    token = (g.get("token") if hasattr(g, "get") else None) or _secret("GITHUB_TOKEN") or _secret("github_token")
+    if not token:
         return None
-    if not g or not g.get("token") or not g.get("repo"):
-        return None
-    return {"token": g["token"], "repo": g["repo"], "path": g.get("path", "offer_register.xlsx"),
-            "branch": g.get("branch", "main")}
+    get = (lambda k: (g.get(k) if hasattr(g, "get") else None) or DEFAULTS[k])
+    return {"token": str(token).strip(), "repo": str(get("repo")).strip(),
+            "path": str(get("path")).strip(), "branch": str(get("branch")).strip()}
 
 
 def enabled() -> bool:
     return _cfg() is not None
 
 
+def describe() -> str:
+    c = _cfg()
+    return f"{c['repo']}/{c['path']} ({c['branch']})" if c else "local file"
+
+
 def _headers(c):
     return {"Authorization": f"Bearer {c['token']}", "Accept": "application/vnd.github+json"}
 
 
+class RegisterUnavailable(RuntimeError):
+    pass
+
+
 def pull(local: Path) -> str:
-    """Download the register to `local`. Returns a status message."""
+    """Download the register to `local`. Raises RegisterUnavailable with a plain reason if it can't."""
     c = _cfg()
     if not c:
+        if on_streamlit_cloud():
+            raise RegisterUnavailable(
+                "GitHub settings are missing from the app's Secrets, so the register of issued IDs "
+                "cannot be loaded. Add the [github] section (token, repo, path, branch) in "
+                "Settings → Secrets, then reboot the app.")
         return "local"
-    r = requests.get(f"{API}/repos/{c['repo']}/contents/{c['path']}", headers=_headers(c),
-                     params={"ref": c["branch"]}, timeout=20)
+    url = f"{API}/repos/{c['repo']}/contents/{c['path']}"
+    try:
+        r = requests.get(url, headers=_headers(c), params={"ref": c["branch"]}, timeout=20)
+    except requests.RequestException as ex:
+        raise RegisterUnavailable(f"Could not reach GitHub: {ex}")
+    if r.status_code == 401:
+        raise RegisterUnavailable("GitHub rejected the token (expired or mistyped). Create a new token and update Secrets.")
     if r.status_code == 404:
-        return "new"  # first run: register will be created and pushed
+        repo_ok = requests.get(f"{API}/repos/{c['repo']}", headers=_headers(c), timeout=20).status_code == 200
+        if not repo_ok:
+            raise RegisterUnavailable(f"The token cannot see the repo '{c['repo']}'. Give the token access to "
+                                      "that repo (Contents: Read and write) or fix the repo name in Secrets.")
+        raise RegisterUnavailable(f"'{c['path']}' was not found on branch '{c['branch']}' of {c['repo']}. "
+                                  "Check the path/branch in Secrets.")
+    if r.status_code == 403:
+        raise RegisterUnavailable("The token is not allowed to read the repo contents. Give it Contents: Read and write.")
     r.raise_for_status()
+    data = r.json()
+    if data.get("content"):
+        raw = base64.b64decode(data["content"])
+    else:  # files over 1 MB come without inline content
+        raw = requests.get(data["download_url"], headers=_headers(c), timeout=30).content
     local.parent.mkdir(parents=True, exist_ok=True)
-    local.write_bytes(base64.b64decode(r.json()["content"]))
+    local.write_bytes(raw)
     return "pulled"
 
 
@@ -70,15 +116,13 @@ def push(local: Path, message: str):
     r = requests.put(url, headers=_headers(c), json=body, timeout=30)
     if r.status_code == 409:
         raise RuntimeError("Register changed elsewhere. Reload the page and try again.")
+    if r.status_code == 403:
+        raise RuntimeError("Token can read but not write. Give it Contents: Read and write.")
     r.raise_for_status()
 
 
 def check_password() -> bool:
-    """Simple login when app_password is set in secrets."""
-    try:
-        pw = st.secrets.get("app_password")
-    except Exception:
-        pw = None
+    pw = _secret("app_password")
     if not pw:
         return True
     if st.session_state.get("auth_ok"):
