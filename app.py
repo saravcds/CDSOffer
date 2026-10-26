@@ -49,7 +49,15 @@ def save_register(entries):
                  "Download the register below and send it to the admin.")
 
 # ---------------------------------------------------------------- sidebar
+LOGO = HERE / "CDSlogo.png"
+
+# widen the sidebar a little so the 250 px logo fits without being scaled down
+st.markdown("<style>section[data-testid='stSidebar']{width:330px !important;min-width:330px !important;}</style>",
+            unsafe_allow_html=True)
+
 with st.sidebar:
+    if LOGO.exists():
+        st.image(str(LOGO), width=250)  # fixed width, height follows aspect ratio
     st.header("Settings")
     letter_date = st.date_input("Letter date", value=date.today(), format="DD/MM/YYYY")
     default_doj = st.date_input("Default joining date", value=letter_date, format="DD/MM/YYYY",
