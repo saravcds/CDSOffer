@@ -11,7 +11,15 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+import importlib
+
 import cloud_store
+import offer_engine
+
+# Streamlit Cloud keeps imported helper files in memory after an update; reload them so a
+# new version of cloud_store.py / offer_engine.py is always used without a manual reboot.
+importlib.reload(cloud_store)
+importlib.reload(offer_engine)
 
 from offer_engine import (DOC_ID_PREFIX, ROW_ORDER, Employee, Register, calc_breakup, clean_address,
                           clean_designation, clean_name, docx_bytes_to_pdf, docx_to_pdf_many,
@@ -42,7 +50,7 @@ reg = Register(REGISTER_PATH)
 # HR signature: kept in the private data repo (never in the public code repo)
 SIGNATURE_PATH = HERE / "data" / "signature.png"
 SIGNATURE_REPO_PATH = "signature.png"
-if "sig_loaded" not in st.session_state:
+if not st.session_state.get("sig_loaded"):  # retry each run until it loads
     try:
         st.session_state["sig_loaded"] = cloud_store.pull_file(SIGNATURE_REPO_PATH, SIGNATURE_PATH)
     except Exception as ex:
