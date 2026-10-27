@@ -372,9 +372,30 @@ def _add_tab_stop(paragraph, pos_inches: float):
     ts.add_tab_stop(Inches(pos_inches), WD_TAB_ALIGNMENT.LEFT)
 
 
+SIGNATURE_WIDTH_IN = 1.5
+
+
+def _add_signature(doc, signatory: str, signature) -> None:
+    """Put the HR signature image on the blank line just above the signatory's name."""
+    paras = doc.paragraphs
+    idx = next((i for i, p in enumerate(paras)
+                if p.text.strip().startswith(signatory.split()[0]) and "HR" in p.text), None)
+    if idx is None or idx == 0:
+        return
+    target = paras[idx - 1]
+    if target.text.strip():
+        return
+    # drop one extra blank line above so the block stays the same height
+    if idx >= 2 and not paras[idx - 2].text.strip() and "ACCEPT" not in paras[idx - 2].text:
+        paras[idx - 2]._p.getparent().remove(paras[idx - 2]._p)
+    img = io.BytesIO(signature) if isinstance(signature, (bytes, bytearray)) else str(signature)
+    target.add_run().add_picture(img, width=Inches(SIGNATURE_WIDTH_IN))
+
+
 def fill_letter(template_path: str | os.PathLike, emp: Employee, doc_id: str, letter_date: date,
                 joining_date: date | None = None, signatory: str = "Khushboo Kaur",
-                signatory_title: str = "Head – HR") -> bytes:
+                signatory_title: str = "Head – HR", signature=None) -> bytes:
+    """signature: PNG/JPG bytes or path of the HR signatory's signature (optional)."""
     joining_date = joining_date or emp.joining_date or letter_date
     doc = Document(str(template_path))
     b = emp.breakup
@@ -450,6 +471,9 @@ def fill_letter(template_path: str | os.PathLike, emp: Employee, doc_id: str, le
                 for r in rest[1:]:
                     r.text = ""
             _add_tab_stop(p, 4.4)
+
+    if signature:
+        _add_signature(doc, signatory, signature)
 
     # 2. Salary annexure table
     ann = doc.tables[1]

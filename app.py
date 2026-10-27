@@ -39,6 +39,16 @@ except Exception as ex:
     st.stop()
 reg = Register(REGISTER_PATH)
 
+# HR signature: kept in the private data repo (never in the public code repo)
+SIGNATURE_PATH = HERE / "data" / "signature.png"
+SIGNATURE_REPO_PATH = "signature.png"
+if "sig_loaded" not in st.session_state:
+    try:
+        st.session_state["sig_loaded"] = cloud_store.pull_file(SIGNATURE_REPO_PATH, SIGNATURE_PATH)
+    except Exception as ex:
+        st.session_state["sig_loaded"] = SIGNATURE_PATH.exists()
+        st.warning(f"Could not load the saved HR signature: {ex}")
+
 
 def save_register(entries):
     reg.add(entries)
@@ -64,6 +74,27 @@ with st.sidebar:
                                 help="Used for 'effective', 'w.e.f.' and Date of Joining unless set per employee")
     signatory = st.text_input("HR signatory", "Khushboo Kaur")
     signatory_title = st.text_input("Signatory title", "Head – HR")
+
+    st.subheader("HR signature")
+    add_sig = st.checkbox("Add signature to letters", value=True)
+    if SIGNATURE_PATH.exists():
+        st.image(str(SIGNATURE_PATH), width=180, caption="Current signature")
+    else:
+        st.warning("No signature saved yet. Upload one below.")
+    up_sig = st.file_uploader("Upload new signature (PNG with transparent or white background)",
+                              type=["png", "jpg", "jpeg"], key="sig_upload")
+    if up_sig is not None:
+        st.image(up_sig.getvalue(), width=180, caption="New signature (preview)")
+        if st.button("Save as signature for all letters"):
+            from PIL import Image
+            im = Image.open(io.BytesIO(up_sig.getvalue()))
+            im.save(SIGNATURE_PATH, "PNG")
+            try:
+                cloud_store.push_file(SIGNATURE_PATH, SIGNATURE_REPO_PATH, "Update HR signature")
+                st.success("Signature saved. It will be used on all new letters.")
+            except Exception as ex:
+                st.error(f"Signature saved for this session only; could not save to GitHub: {ex}")
+    signature = SIGNATURE_PATH.read_bytes() if (add_sig and SIGNATURE_PATH.exists()) else None
     make_pdf = st.checkbox("Also create PDF", value=True,
                            help="Needs MS Word (docx2pdf) or LibreOffice on this computer")
     up_tpl = st.file_uploader("Use a different template (.docx)", type=["docx"])
@@ -96,7 +127,7 @@ def breakup_df(ctc: float) -> pd.DataFrame:
 
 
 def save_outputs(emp: Employee, doc_id: str, doj: date, pdf: bool):
-    docx_bytes = fill_letter(tpl(), emp, doc_id, letter_date, doj, signatory, signatory_title)
+    docx_bytes = fill_letter(tpl(), emp, doc_id, letter_date, doj, signatory, signatory_title, signature)
     fname = safe_filename(doc_id, emp.name)
     folder = OUTPUT_DIR / f"{letter_date:%Y-%m}"
     (folder / "Word").mkdir(parents=True, exist_ok=True)
@@ -205,7 +236,7 @@ with tab2:
                         emp = employee_from_row(r["Employee Name"], r["Annual CTC"], r["Designation"],
                                                 str(r["Address (use | for new line)"] or "").replace("|", "\n"),
                                                 salutation=r["Dear ..."] or None, joining=doj_r)
-                        dx = fill_letter(tpl(), emp, doc_id, letter_date, doj_r, signatory, signatory_title)
+                        dx = fill_letter(tpl(), emp, doc_id, letter_date, doj_r, signatory, signatory_title, signature)
                         fname = safe_filename(doc_id, emp.name)
                         p = folder / "Word" / f"{fname}.docx"
                         p.write_bytes(dx)

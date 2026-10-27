@@ -106,6 +106,10 @@ def push(local: Path, message: str):
     c = _cfg()
     if not c:
         return
+    _push_cfg(c, local, message)
+
+
+def _push_cfg(c, local: Path, message: str):
     url = f"{API}/repos/{c['repo']}/contents/{c['path']}"
     r = requests.get(url, headers=_headers(c), params={"ref": c["branch"]}, timeout=20)
     sha = r.json().get("sha") if r.status_code == 200 else None
@@ -135,3 +139,34 @@ def check_password() -> bool:
             st.rerun()
         st.error("Wrong password")
     return False
+
+
+# ---------------------------------------------------------------- other files (e.g. HR signature)
+def pull_file(repo_path: str, local: Path) -> bool:
+    """Download an optional file from the data repo. Returns False if it isn't there."""
+    c = _cfg()
+    if not c:
+        return local.exists()
+    r = requests.get(f"{API}/repos/{c['repo']}/contents/{repo_path}", headers=_headers(c),
+                     params={"ref": c["branch"]}, timeout=20)
+    if r.status_code == 404:
+        return False
+    r.raise_for_status()
+    data = r.json()
+    raw = base64.b64decode(data["content"]) if data.get("content") else \
+        requests.get(data["download_url"], headers=_headers(c), timeout=30).content
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_bytes(raw)
+    return True
+
+
+def push_file(local: Path, repo_path: str, message: str):
+    c = _cfg()
+    if not c:
+        return
+    saved = c["path"]
+    try:
+        c["path"] = repo_path
+        _push_cfg(c, local, message)
+    finally:
+        c["path"] = saved

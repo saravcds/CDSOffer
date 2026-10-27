@@ -89,6 +89,10 @@ def main():
     ap.add_argument("--template", default=str(HERE / "templates" / "CDS Appt Letter.docx"))
     ap.add_argument("--register", default=str(HERE / "data" / "offer_register.xlsx"))
     ap.add_argument("--no-pdf", action="store_true")
+    ap.add_argument("--signature", default=str(HERE / "data" / "signature.png"),
+                    help="HR signature image; use '' to leave it out")
+    ap.add_argument("--reissue-from", type=int, default=None,
+                    help="re-create letters with existing IDs starting at this number (register not changed)")
     a = ap.parse_args()
 
     letter_date = datetime.strptime(a.date, "%Y-%m-%d").date()
@@ -98,7 +102,8 @@ def main():
 
     emps = read_employees_xlsx(a.excel, a.sheet)
     reg = Register(a.register)
-    seq0 = reg.next_seq(year)
+    seq0 = a.reissue_from or reg.next_seq(year)
+    sig = a.signature if a.signature and Path(a.signature).exists() else None
     ids = [make_doc_id(year, seq0 + i) for i in range(len(emps))]
 
     write_review(emps, ids, out / f"Offer Review - {letter_date:%d %b %Y}.xlsx", letter_date)
@@ -110,13 +115,14 @@ def main():
             continue
         fname = safe_filename(did, e.name)
         p = out / "Word" / f"{fname}.docx"
-        p.write_bytes(fill_letter(a.template, e, did, letter_date))
+        p.write_bytes(fill_letter(a.template, e, did, letter_date, signature=sig))
         docx_files.append(p)
         entries.append(register_entry(e, did, year, seq0 + i, letter_date, letter_date, fname,
                                       status="Issued - check flags" if e.flags else "Issued"))
     if not a.no_pdf:
         docx_to_pdf_many(docx_files, out / "PDF")
-    reg.add(entries)
+    if not a.reissue_from:
+        reg.add(entries)
     print(f"Done: {len(docx_files)} letters, IDs {ids[0]} to {ids[-1]}")
 
 
